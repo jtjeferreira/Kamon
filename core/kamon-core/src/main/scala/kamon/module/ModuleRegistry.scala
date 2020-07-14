@@ -38,19 +38,21 @@ import scala.util.control.NonFatal
   */
 class ModuleRegistry(configuration: Configuration, clock: Clock, metricRegistry: MetricRegistry, tracer: Tracer) {
 
+  private var _registrySettings = readRegistrySettings(configuration.config())
+  
   private val _logger = LoggerFactory.getLogger(classOf[ModuleRegistry])
-  private val _metricsTickerExecutor = Executors.newScheduledThreadPool(0, threadFactory("kamon-metrics-ticker", daemon = true))
-  private val _spansTickerExecutor = Executors.newScheduledThreadPool(0, threadFactory("kamon-spans-ticker", daemon = true))
+  private val _metricsTickerExecutor = new ScheduledThreadPoolExecutor(0, threadFactory("kamon-metrics-ticker", daemon = true))
+  private val _spansTickerExecutor = new ScheduledThreadPoolExecutor(0, threadFactory("kamon-spans-ticker", daemon = true))
 
   private val _metricsTickerSchedule = new AtomicReference[ScheduledFuture[_]]()
   private val _spansTickerSchedule = new AtomicReference[ScheduledFuture[_]]()
 
-  private var _registrySettings = readRegistrySettings(configuration.config())
   private var _registeredModules: Map[String, Entry[Module]] = Map.empty
   private var _metricReporterModules: Map[String, Entry[MetricReporter]] = Map.empty
   private var _spanReporterModules: Map[String, Entry[SpanReporter]] = Map.empty
 
   // Start ticking as soon as the registry is created.
+  reconfigureKeepAlives()
   scheduleMetricsTicker()
   scheduleSpansTicker()
 
@@ -118,8 +120,14 @@ class ModuleRegistry(configuration: Configuration, clock: Clock, metricRegistry:
   def reconfigure(newConfig: Config): Unit = synchronized {
     _registrySettings = readRegistrySettings(configuration.config())
     _registeredModules.values.foreach(entry => reconfigureModule(entry, newConfig))
+    reconfigureKeepAlives()
     scheduleMetricsTicker()
     scheduleSpansTicker()
+  }
+  
+  private def reconfigureKeepAlives(): Unit = {
+    _metricsTickerExecutor.setKeepAliveTime(_registrySettings.metricTickInterval.toMillis, TimeUnit.MILLISECONDS)
+    _spansTickerExecutor.setKeepAliveTime(_registrySettings.traceTickInterval.toMillis, TimeUnit.MILLISECONDS)
   }
 
   /**
